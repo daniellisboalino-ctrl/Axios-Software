@@ -12,12 +12,12 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Simple hash function
 function hashPass(pass) {
   return crypto.createHash('sha256').update(pass + 'axios2026').digest('hex');
 }
 
 async function initDB() {
+  // Criar tabelas
   await pool.query(`
     CREATE TABLE IF NOT EXISTS usuarios (
       id SERIAL PRIMARY KEY,
@@ -46,7 +46,7 @@ async function initDB() {
       adm TEXT, grupo TEXT, cota TEXT, credito NUMERIC DEFAULT 0,
       vpago NUMERIC DEFAULT 0, lance NUMERIC DEFAULT 0, agil NUMERIC DEFAULT 0,
       entrada NUMERIC DEFAULT 0, parc_ant NUMERIC DEFAULT 0, parc_nova NUMERIC DEFAULT 0,
-      pertence TEXT, cliente TEXT, pago_cli NUMERIC DEFAULT 0,
+      pertence TEXT, cliente TEXT, intermediador TEXT, pago_cli NUMERIC DEFAULT 0,
       data TEXT, banco TEXT, vcto TEXT, status TEXT DEFAULT 'PENDENTE',
       vendedor TEXT, obs TEXT,
       created_at TIMESTAMP DEFAULT NOW()
@@ -89,6 +89,15 @@ async function initDB() {
     );
   `);
 
+  // Migracoes: adicionar colunas novas em tabelas existentes
+  await pool.query(`
+    ALTER TABLE vendas ADD COLUMN IF NOT EXISTS vendedor TEXT;
+    ALTER TABLE vendas ADD COLUMN IF NOT EXISTS intermediador TEXT;
+    ALTER TABLE contratos ADD COLUMN IF NOT EXISTS adm TEXT;
+    ALTER TABLE contratos ADD COLUMN IF NOT EXISTS grupo TEXT;
+    ALTER TABLE contratos ADD COLUMN IF NOT EXISTS cota TEXT;
+  `);
+
   const uc = await pool.query('SELECT COUNT(*) FROM usuarios');
   if (parseInt(uc.rows[0].count) === 0) {
     await pool.query(`
@@ -109,9 +118,9 @@ async function initDB() {
       ('9052','733','YAMAHA','WENDEL',18925,883.63,1769.81,'MOTO','CONTEMPLADA','2026-03-20',24,0,''),
       ('8095','207','YAMAHA','DANIEL',41514,1055.84,2111.68,'CARRO','CONTEMPLADA','2026-03-20',44,0,''),
       ('9005','490','YAMAHA','ALINE',23112,584.08,1752.48,'MOTO','S/ CONTEM','2026-03-20',48,0,'');
-      INSERT INTO vendas (adm,grupo,cota,credito,vpago,lance,agil,entrada,parc_ant,parc_nova,pertence,cliente,pago_cli,data,banco,vcto,status,vendedor,obs) VALUES
-      ('YAMAHA','8088','450',21769.35,873.41,8363.46,500,9736.87,873.41,529.69,'DANIEL','JOSE',8363.46,'2025-07-16','ITAU','7','PENDENTE','DANIEL',''),
-      ('YAMAHA','8086','762',17680.85,708.55,6497.55,1000,8206.10,709.37,439.58,'ALINE','AFONSO',8200,'2025-07-18','ITAU','12','QUITADO','ALINE','');
+      INSERT INTO vendas (adm,grupo,cota,credito,vpago,lance,agil,entrada,parc_ant,parc_nova,pertence,cliente,intermediador,pago_cli,data,banco,vcto,status,vendedor,obs) VALUES
+      ('YAMAHA','8088','450',21769.35,873.41,8363.46,500,9736.87,873.41,529.69,'DANIEL','JOSE','',8363.46,'2025-07-16','ITAU','7','PENDENTE','DANIEL',''),
+      ('YAMAHA','8086','762',17680.85,708.55,6497.55,1000,8206.10,709.37,439.58,'ALINE','AFONSO','',8200,'2025-07-18','ITAU','12','QUITADO','ALINE','');
       INSERT INTO caixa (tipo,data,descricao,cat,valor,status,mes,obs) VALUES
       ('RECEITA','2025-12-04','COMISSAO YAMAHA','COMISSAO',11207.64,'PG','DEZ/2025',''),
       ('RECEITA','2025-12-08','VENDA CARTA','VENDA CARTA',22890,'PG','DEZ/2025',''),
@@ -126,8 +135,8 @@ async function initDB() {
       ('ALINE','20534149','YAMAHA','8084','112',46000,1466.42,36,0,0.02,'ATIVO',''),
       ('DANIEL','20533859','YAMAHA','8099','102',46000,1195.23,45,0,0.02,'ATIVO','');
       INSERT INTO agenda (titulo,descricao,data,hora,tipo,status,grupo,cota,cliente) VALUES
-      ('Vencimento cota 9024/130','Parcela em atraso - ANAJAIRA','2026-03-12','09:00','VENCIMENTO','PENDENTE','9024','130','ANAJAIRA'),
-      ('Reuniao com cliente','JOSE - fechar venda carta','2026-03-15','14:00','REUNIAO','PENDENTE','','','JOSE');
+      ('Vencimento cota 9024/130','Parcela em atraso','2026-03-12','09:00','VENCIMENTO','PENDENTE','9024','130','ANAJAIRA'),
+      ('Reuniao com cliente','Fechar venda carta','2026-03-15','14:00','REUNIAO','PENDENTE','','','JOSE');
       INSERT INTO contratos (numero,cliente,tipo,grupo,cota,adm,valor,data_assinatura,status,obs) VALUES
       ('CTR-001','JOSE','COMPRA E VENDA','8088','450','YAMAHA',21769.35,'2025-07-16','ATIVO',''),
       ('CTR-002','AFONSO','COMPRA E VENDA','8086','762','YAMAHA',17680.85,'2025-07-18','ENCERRADO','');
@@ -141,7 +150,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Auth middleware
 async function auth(req, res, next) {
   const token = req.headers['x-session'];
   if (!token) return res.status(401).json({ error: 'Nao autenticado' });
@@ -163,7 +171,6 @@ function requirePerfil(...perfis) {
   };
 }
 
-// Login
 app.post('/api/login', async function(req, res) {
   try {
     const { email, senha } = req.body;
@@ -187,7 +194,6 @@ app.get('/api/me', auth, function(req, res) {
   res.json({ id: u.id, nome: u.nome, email: u.email, perfil: u.perfil });
 });
 
-// Usuarios (admin only)
 app.get('/api/usuarios', auth, requirePerfil('admin'), async function(req, res) {
   const r = await pool.query('SELECT id,nome,email,perfil,ativo,created_at FROM usuarios ORDER BY id');
   res.json(r.rows);
@@ -215,14 +221,6 @@ app.put('/api/usuarios/:id', auth, requirePerfil('admin'), async function(req, r
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/usuarios/:id/senha', auth, requirePerfil('admin'), async function(req, res) {
-  try {
-    await pool.query('UPDATE usuarios SET senha=$1 WHERE id=$2', [hashPass(req.body.senha), req.params.id]);
-    res.json({ ok: true });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// Generic CRUD factory
 function makeRoutes(table, allowedPerfis, readPerfis) {
   const rp = readPerfis || allowedPerfis;
   app.get('/api/' + table, auth, async function(req, res) {
@@ -272,20 +270,18 @@ function makeRoutes(table, allowedPerfis, readPerfis) {
   });
 }
 
-makeRoutes('estoque',    ['admin','financeiro'],          ['admin','vendedor','financeiro','investidor']);
-makeRoutes('vendas',     ['admin','vendedor'],            ['admin','vendedor','financeiro']);
-makeRoutes('vendas_sem', ['admin','vendedor'],            ['admin','vendedor','financeiro']);
-makeRoutes('caixa',      ['admin','financeiro'],          ['admin','financeiro']);
-makeRoutes('investidores',['admin'],                     ['admin','investidor','financeiro']);
-makeRoutes('agenda',     ['admin','vendedor','financeiro'],['admin','vendedor','financeiro']);
-makeRoutes('contratos',  ['admin','vendedor'],            ['admin','vendedor','financeiro']);
+makeRoutes('estoque',     ['admin','financeiro'],           ['admin','vendedor','financeiro','investidor']);
+makeRoutes('vendas',      ['admin','vendedor'],             ['admin','vendedor','financeiro']);
+makeRoutes('vendas_sem',  ['admin','vendedor'],             ['admin','vendedor','financeiro']);
+makeRoutes('caixa',       ['admin','financeiro'],           ['admin','financeiro']);
+makeRoutes('investidores',['admin'],                       ['admin','investidor','financeiro']);
+makeRoutes('agenda',      ['admin','vendedor','financeiro'],['admin','vendedor','financeiro']);
+makeRoutes('contratos',   ['admin','vendedor'],             ['admin','vendedor','financeiro']);
 
-// Relatorios
 app.get('/api/relatorio/comissoes', auth, async function(req, res) {
   try {
     const r = await pool.query(`
-      SELECT
-        vendedor,
+      SELECT vendedor,
         COUNT(*) as total_vendas,
         SUM(credito) as total_credito,
         SUM(entrada) as total_entrada,
@@ -293,9 +289,7 @@ app.get('/api/relatorio/comissoes', auth, async function(req, res) {
         SUM(pago_cli) as total_recebido,
         COUNT(CASE WHEN status = 'QUITADO' THEN 1 END) as quitadas,
         COUNT(CASE WHEN status = 'PENDENTE' THEN 1 END) as pendentes
-      FROM vendas
-      GROUP BY vendedor
-      ORDER BY total_credito DESC
+      FROM vendas GROUP BY vendedor ORDER BY total_credito DESC
     `);
     res.json(r.rows);
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -304,14 +298,11 @@ app.get('/api/relatorio/comissoes', auth, async function(req, res) {
 app.get('/api/relatorio/caixa-mensal', auth, async function(req, res) {
   try {
     const r = await pool.query(`
-      SELECT
-        mes,
+      SELECT mes,
         SUM(CASE WHEN tipo='RECEITA' THEN valor ELSE 0 END) as receitas,
         SUM(CASE WHEN tipo='DESPESA' THEN valor ELSE 0 END) as despesas,
         SUM(CASE WHEN tipo='RECEITA' THEN valor ELSE -valor END) as resultado
-      FROM caixa
-      GROUP BY mes
-      ORDER BY MIN(created_at)
+      FROM caixa GROUP BY mes ORDER BY MIN(created_at)
     `);
     res.json(r.rows);
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -320,21 +311,16 @@ app.get('/api/relatorio/caixa-mensal', auth, async function(req, res) {
 app.get('/api/relatorio/estoque-resumo', auth, async function(req, res) {
   try {
     const r = await pool.query(`
-      SELECT
-        categoria,
-        situacao,
+      SELECT categoria, situacao,
         COUNT(*) as quantidade,
         SUM(credito) as credito_total,
         SUM(parcela) as parcela_total
-      FROM estoque
-      GROUP BY categoria, situacao
-      ORDER BY categoria, situacao
+      FROM estoque GROUP BY categoria, situacao ORDER BY categoria, situacao
     `);
     res.json(r.rows);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// Export
 app.get('/api/export', auth, async function(req, res) {
   try {
     const tables = ['estoque','vendas','vendas_sem','caixa','investidores','agenda','contratos'];
@@ -358,7 +344,7 @@ app.get('*', function(req, res) {
 
 initDB().then(function() {
   app.listen(PORT, function() {
-    console.log('Axios Sistema v2.0 rodando na porta ' + PORT);
+    console.log('Axios Sistema v2.1 rodando na porta ' + PORT);
   });
 }).catch(function(err) {
   console.error('Erro ao conectar banco:', err.message);

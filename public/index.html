@@ -250,19 +250,23 @@ textarea{resize:vertical;min-height:60px;}
 </div>
 
 <div class="modal-overlay" id="modal-venda">
-  <div class="modal">
+  <div class="modal" style="max-width:620px">
     <div class="modal-head"><h3>🤝 Nova Venda Contemplada</h3><button class="modal-close" onclick="cm('modal-venda')">×</button></div>
     <div class="modal-body"><div class="form-grid">
       <div class="fg"><label>ADM</label><select id="v-adm"><option>YAMAHA</option><option>ITAU</option><option>GAZIN</option></select></div>
       <div class="fg"><label>Grupo</label><input id="v-grupo"></div>
       <div class="fg"><label>Cota</label><input id="v-cota"></div>
       <div class="fg"><label>Crédito R$</label><input type="number" id="v-credito" step="0.01"></div>
-      <div class="fg"><label>Valor Pago R$</label><input type="number" id="v-vpago" step="0.01"></div>
-      <div class="fg"><label>Lance R$</label><input type="number" id="v-lance" step="0.01" value="0"></div>
-      <div class="fg"><label>Ágil R$</label><input type="number" id="v-agil" step="0.01" value="0"></div>
-      <div class="fg"><label>Entrada Total R$</label><input type="number" id="v-entrada" step="0.01"></div>
+      <div class="fg"><label>Valor Pago (parcela atual) R$</label><input type="number" id="v-vpago" step="0.01" value="0" oninput="calcEntrada()"></div>
+      <div class="fg"><label>Lance R$</label><input type="number" id="v-lance" step="0.01" value="0" oninput="calcEntrada()"></div>
+      <div class="fg"><label>Ágil R$</label><input type="number" id="v-agil" step="0.01" value="0" oninput="calcEntrada()"></div>
+      <div class="fg full" style="background:var(--gl);border-radius:8px;padding:10px;border:1px solid #a7d7b8;">
+        <label style="color:var(--green)">Entrada Total R$ <span style="font-weight:400;font-size:10px;">(calculado: Valor Pago + Lance + Ágil)</span></label>
+        <input type="number" id="v-entrada" step="0.01" value="0" style="background:#fff;border-color:#a7d7b8;font-size:16px;font-weight:700;color:var(--green);" readonly>
+      </div>
       <div class="fg"><label>Investidor</label><input id="v-pertence"></div>
       <div class="fg"><label>Cliente</label><input id="v-cliente"></div>
+      <div class="fg"><label>Intermediador</label><input id="v-intermediador" placeholder="Nome do intermediador (se houver)"></div>
       <div class="fg"><label>Pago pelo Cliente R$</label><input type="number" id="v-pago-cli" step="0.01" value="0"></div>
       <div class="fg"><label>Data</label><input type="date" id="v-data"></div>
       <div class="fg"><label>Banco/PIX</label><input id="v-banco"></div>
@@ -620,7 +624,7 @@ async function renderVendas() {
   let html = `<div class="tabs"><div class="tab active" id="tab-v1" onclick="setVTab('contemp',this)">Contempladas</div><div class="tab" id="tab-v2" onclick="setVTab('sem',this)">Sem Contemplação</div></div>`;
   html += `<div id="vtab-contemp">`;
   if (canEdit) html += `<div class="toolbar"><div class="search-box"><span>🔍</span><input type="text" placeholder="Cliente, grupo..." id="srch-vendas" oninput="filterVendas()"></div><button class="btn btn-green" onclick="om('modal-venda')">+ Nova Venda</button></div>`;
-  html += `<div class="card"><div class="card-head"><div class="card-title">Vendas Contempladas</div><span class="badge bg" id="cnt-vendas">${vendas.length}</span></div><div class="table-wrap"><table><thead><tr><th>ADM</th><th>Grupo/Cota</th><th>Cliente</th><th>Crédito</th><th>Entrada</th><th>Pago</th><th>Falta</th><th>Vendedor</th><th>Data</th><th>Status</th>${canEdit?'<th>Ações</th>':''}</tr></thead><tbody id="tbody-vendas"></tbody></table></div></div></div>`;
+  html += `<div class="card"><div class="card-head"><div class="card-title">Vendas Contempladas</div><span class="badge bg" id="cnt-vendas">${vendas.length}</span></div><div class="table-wrap"><table><thead><tr><th>ADM</th><th>Grupo/Cota</th><th>Cliente</th><th>Intermediador</th><th>Crédito</th><th>Entrada</th><th>Pago</th><th>Falta</th><th>Vendedor</th><th>Data</th><th>Status</th>${canEdit?'<th>Ações</th>':''}</tr></thead><tbody id="tbody-vendas"></tbody></table></div></div></div>`;
   html += `<div id="vtab-sem" style="display:none">`;
   if (canEdit) html += `<div class="toolbar"><div class="search-box"><span>🔍</span><input type="text" placeholder="Investidor, grupo..." id="srch-vsem" oninput="filterVsem()"></div><button class="btn btn-amber" onclick="om('modal-vsem')">+ Nova Venda</button></div>`;
   html += `<div class="card"><div class="card-head"><div class="card-title">Sem Contemplação</div><span class="badge ba" id="cnt-vsem">${vsem.length}</span></div><div class="table-wrap"><table><thead><tr><th>Grupo/Cota</th><th>Investidor</th><th>ADM</th><th>Crédito</th><th>Parcela</th><th>Cat.</th><th>Vendedor</th>${canEdit?'<th>Ações</th>':''}</tr></thead><tbody id="tbody-vsem"></tbody></table></div></div></div>`;
@@ -641,10 +645,11 @@ function filterVendas() {
   const lista = (DATA.vendas||[]).filter(v=>!q||[v.cliente,v.grupo,v.cota,v.pertence].join(' ').toLowerCase().includes(q));
   const cnt = document.getElementById('cnt-vendas'); if(cnt) cnt.textContent = lista.length;
   const tb = document.getElementById('tbody-vendas'); if (!tb) return;
-  if (!lista.length) { tb.innerHTML = '<tr><td colspan="11"><div class="empty"><div class="eicon">🤝</div><p>Nenhuma venda</p></div></td></tr>'; return; }
+  if (!lista.length) { tb.innerHTML = '<tr><td colspan="12"><div class="empty"><div class="eicon">🤝</div><p>Nenhuma venda</p></div></td></tr>'; return; }
   tb.innerHTML = lista.map(c=>{const f=(+c.entrada||0)-(+c.pago_cli||0); return`<tr>
     <td>${c.adm}</td><td><b>${c.grupo}</b>/<span class="mono">${c.cota}</span></td>
     <td><b>${c.cliente}</b><br><span style="font-size:10px;color:var(--muted)">${c.pertence}</span></td>
+    <td style="font-size:11px;color:var(--muted)">${c.intermediador||'—'}</td>
     <td class="mono" style="color:var(--blue)">${fmt(c.credito)}</td>
     <td class="mono">${fmt(c.entrada)}</td><td class="mono" style="color:var(--green)">${fmt(c.pago_cli)}</td>
     <td class="mono" style="color:${f>0?'var(--red)':'var(--green)'}">${f>0?fmt(f):'Quitado'}</td>
@@ -896,27 +901,57 @@ function setRTab(tab, el) {
 // ── SIMULADOR ──
 function renderSimulador() {
   const html = `
-    <div class="two-col">
+    <div style="display:grid;grid-template-columns:380px 1fr;gap:20px;align-items:start;">
       <div class="card">
-        <div class="card-head"><div class="card-title">🧮 Simulador de Consórcio</div></div>
-        <div class="card-body">
-          <div class="form-grid">
-            <div class="fg full"><label>Tipo de Bem</label><select id="sim-tipo" onchange="calcSim()"><option value="MOTO">Moto</option><option value="CARRO">Carro</option><option value="IMOVEL">Imóvel</option></select></div>
-            <div class="fg full"><label>Valor do Crédito (R$)</label><input type="number" id="sim-credito" value="30000" step="1000" oninput="calcSim()"></div>
-            <div class="fg"><label>Prazo (meses)</label><input type="number" id="sim-prazo" value="60" oninput="calcSim()"></div>
-            <div class="fg"><label>Taxa Adm (% ao ano)</label><input type="number" id="sim-taxa" value="18" step="0.5" oninput="calcSim()"></div>
-            <div class="fg full"><label>Lance Ofertado (% do crédito)</label><input type="number" id="sim-lance-pct" value="20" step="1" oninput="calcSim()"></div>
-            <div class="fg full"><label>Nome do Cliente (para proposta)</label><input type="text" id="sim-cliente" placeholder="Ex: João Silva"></div>
+        <div class="card-head"><div class="card-title">🧮 Dados da Simulação</div></div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:12px;">
+          <div class="fg"><label>Nome do Cliente</label><input type="text" id="sim-cliente" placeholder="Ex: João Silva" oninput="calcSim()"></div>
+          <div class="fg"><label>Tipo de Bem</label>
+            <select id="sim-tipo" onchange="calcSim()">
+              <option value="MOTO">Moto</option>
+              <option value="CARRO">Carro / Auto</option>
+              <option value="IMOVEL">Imóvel</option>
+            </select>
           </div>
-          <button class="btn btn-dark" style="width:100%;margin-top:16px" onclick="calcSim()">Calcular</button>
+          <div class="fg"><label>Valor do Crédito (R$)</label><input type="number" id="sim-credito" value="30000" step="1000" oninput="calcSim()"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="fg"><label>Prazo (meses)</label><input type="number" id="sim-prazo" value="60" oninput="calcSim()"></div>
+            <div class="fg"><label>Taxa Adm % / ano</label><input type="number" id="sim-taxa" value="18" step="0.5" oninput="calcSim()"></div>
+          </div>
+
+          <div style="background:var(--s2);border-radius:8px;padding:14px;margin-top:4px;">
+            <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:var(--ink);margin-bottom:10px;">Lance Embutido (Fundo Comum)</div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">O lance é pago com parte das próprias parcelas do consórcio (sem desembolso adicional).</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="fg"><label>% do Crédito</label><input type="number" id="sim-embutido-pct" value="0" step="1" min="0" max="30" oninput="calcSim()"></div>
+              <div class="fg"><label>Valor (R$)</label><input type="number" id="sim-embutido-val" value="0" step="100" oninput="syncLance('emb')"></div>
+            </div>
+          </div>
+
+          <div style="background:var(--s2);border-radius:8px;padding:14px;">
+            <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:var(--ink);margin-bottom:10px;">Lance com Recurso Próprio</div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">O cliente paga o lance com dinheiro próprio, reduzindo o saldo devedor e as parcelas.</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="fg"><label>% do Crédito</label><input type="number" id="sim-proprio-pct" value="0" step="1" min="0" oninput="calcSim()"></div>
+              <div class="fg"><label>Valor (R$)</label><input type="number" id="sim-proprio-val" value="0" step="100" oninput="syncLance('prop')"></div>
+            </div>
+          </div>
+
+          <button class="btn btn-dark" style="width:100%;margin-top:4px;padding:12px;" onclick="calcSim()">Calcular Simulação</button>
+          <button class="btn btn-ghost" style="width:100%;" onclick="gerarPDF()">📄 Gerar PDF para Cliente</button>
         </div>
       </div>
+
       <div id="sim-result-wrap">
-        <div class="card" style="background:linear-gradient(135deg,#1a1612,#2e2820)">
-          <div class="card-body">
-            <div style="color:var(--accent);font-family:monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;margin-bottom:12px">Resultado da Simulação</div>
-            <div id="sim-result" style="color:#fff6;font-size:13px">Preencha os dados ao lado e clique em Calcular.</div>
+        <div style="background:linear-gradient(145deg,#1a1612 0%,#2e2820 100%);border-radius:12px;padding:28px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+            <div>
+              <div style="color:var(--accent);font-family:monospace;font-size:9px;letter-spacing:3px;text-transform:uppercase;">Axios Maringá · Simulação</div>
+              <div style="color:#fff;font-size:20px;font-weight:800;margin-top:4px;" id="sim-titulo">Proposta de Consórcio</div>
+            </div>
+            <div style="font-size:36px;" id="sim-icon">🧮</div>
           </div>
+          <div id="sim-result" style="color:#fff6;font-size:13px;">Preencha os dados ao lado para ver a simulação.</div>
         </div>
       </div>
     </div>`;
@@ -924,37 +959,241 @@ function renderSimulador() {
   calcSim();
 }
 
-function calcSim() {
+function syncLance(tipo) {
   const credito = +document.getElementById('sim-credito')?.value||0;
-  const prazo = +document.getElementById('sim-prazo')?.value||60;
-  const taxa = +document.getElementById('sim-taxa')?.value||18;
-  const lancePct = +document.getElementById('sim-lance-pct')?.value||0;
-  const tipo = document.getElementById('sim-tipo')?.value||'MOTO';
-  const cliente = document.getElementById('sim-cliente')?.value||'Cliente';
+  if (!credito) return;
+  if (tipo==='emb') {
+    const val = +document.getElementById('sim-embutido-val')?.value||0;
+    const pctEl = document.getElementById('sim-embutido-pct');
+    if (pctEl) pctEl.value = ((val/credito)*100).toFixed(1);
+  } else {
+    const val = +document.getElementById('sim-proprio-val')?.value||0;
+    const pctEl = document.getElementById('sim-proprio-pct');
+    if (pctEl) pctEl.value = ((val/credito)*100).toFixed(1);
+  }
+  calcSim();
+}
+
+let _simData = {};
+
+function calcSim() {
+  const credito   = +document.getElementById('sim-credito')?.value||0;
+  const prazo     = +document.getElementById('sim-prazo')?.value||60;
+  const taxa      = +document.getElementById('sim-taxa')?.value||18;
+  const embutidoPct = +document.getElementById('sim-embutido-pct')?.value||0;
+  const proprioPct  = +document.getElementById('sim-proprio-pct')?.value||0;
+  const tipo      = document.getElementById('sim-tipo')?.value||'MOTO';
+  const cliente   = document.getElementById('sim-cliente')?.value||'Cliente';
+
+  // Sync val fields from pct
+  const emEl = document.getElementById('sim-embutido-val');
+  const prEl = document.getElementById('sim-proprio-val');
+  if (emEl && credito) emEl.value = (credito * embutidoPct/100).toFixed(2);
+  if (prEl && credito) prEl.value = (credito * proprioPct/100).toFixed(2);
+
   if (!credito || !prazo) return;
 
-  const taxaMensal = taxa/100/12;
-  const parcelaBase = credito/prazo;
-  const taxaAdm = credito*(taxa/100/12);
-  const parcelaMensal = parcelaBase + taxaAdm;
-  const totalPago = parcelaMensal * prazo;
-  const lance = credito * (lancePct/100);
-  const parcelaComLance = (credito - lance) / prazo + taxaAdm;
-  const economiaLance = (parcelaMensal - parcelaComLance) * prazo;
+  const taxaMensal   = taxa/100/12;
+  const parcelaBase  = credito/prazo;
+  const taxaAdmMensal = credito * taxaMensal;
+  const parcelaSemLance = parcelaBase + taxaAdmMensal;
+  const totalSemLance   = parcelaSemLance * prazo;
+
+  // Lance embutido: reduz parcela (banco usa fundo do próprio consorciado)
+  const lanceEmbutido   = credito * embutidoPct/100;
+  const saldoEmbutido   = credito - lanceEmbutido;
+  const parcelaEmbutida = (saldoEmbutido/prazo) + taxaAdmMensal;
+  const totalEmbutido   = parcelaEmbutida * prazo;
+  const economiaEmbutido = totalSemLance - totalEmbutido;
+
+  // Lance recurso próprio: cliente paga à vista, reduz saldo
+  const lanceProprio    = credito * proprioPct/100;
+  const saldoProprio    = credito - lanceProprio;
+  const parcelaPropria  = (saldoProprio/prazo) + taxaAdmMensal;
+  const totalProprio    = parcelaPropria * prazo + lanceProprio;
+  const economiaProprio = totalSemLance - (parcelaPropria * prazo);
+
+  // Lance combinado (embutido + próprio)
+  const lanceCombinado  = lanceEmbutido + lanceProprio;
+  const saldoCombinado  = credito - lanceCombinado;
+  const parcelaCombinada = (saldoCombinado/prazo) + taxaAdmMensal;
+  const totalCombinado  = parcelaCombinada * prazo + lanceProprio;
 
   const icons = {MOTO:'🏍️',CARRO:'🚗',IMOVEL:'🏠'};
-  document.getElementById('sim-result').innerHTML = `
-    <div style="font-size:16px;font-weight:800;color:#fff;margin-bottom:16px">${icons[tipo]} Proposta para ${cliente}</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div style="background:#fff08;border-radius:8px;padding:12px"><div style="font-size:9px;color:#fff6;text-transform:uppercase;letter-spacing:1px;font-family:monospace">Crédito</div><div style="font-size:18px;font-weight:800;color:#fff;margin-top:3px">${fmt(credito)}</div></div>
-      <div style="background:#fff08;border-radius:8px;padding:12px"><div style="font-size:9px;color:#fff6;text-transform:uppercase;letter-spacing:1px;font-family:monospace">Parcela s/ lance</div><div style="font-size:18px;font-weight:800;color:#fff;margin-top:3px">${fmt(parcelaMensal)}</div></div>
-      <div style="background:#fff08;border-radius:8px;padding:12px"><div style="font-size:9px;color:#fff6;text-transform:uppercase;letter-spacing:1px;font-family:monospace">Prazo</div><div style="font-size:18px;font-weight:800;color:#fff;margin-top:3px">${prazo} meses</div></div>
-      <div style="background:#fff08;border-radius:8px;padding:12px"><div style="font-size:9px;color:#fff6;text-transform:uppercase;letter-spacing:1px;font-family:monospace">Total s/ lance</div><div style="font-size:18px;font-weight:800;color:#fff;margin-top:3px">${fmt(totalPago)}</div></div>
-      ${lancePct>0?`<div style="background:#1a7a4a33;border-radius:8px;padding:12px;border:1px solid #1a7a4a"><div style="font-size:9px;color:#fff6;text-transform:uppercase;letter-spacing:1px;font-family:monospace">Lance (${lancePct}%)</div><div style="font-size:18px;font-weight:800;color:#2da05f;margin-top:3px">${fmt(lance)}</div></div>
-      <div style="background:#1a7a4a33;border-radius:8px;padding:12px;border:1px solid #1a7a4a"><div style="font-size:9px;color:#fff6;text-transform:uppercase;letter-spacing:1px;font-family:monospace">Parcela c/ lance</div><div style="font-size:18px;font-weight:800;color:#2da05f;margin-top:3px">${fmt(parcelaComLance)}</div></div>`:''}
+  const tipoLabel = {MOTO:'Moto',CARRO:'Carro / Auto',IMOVEL:'Imóvel'};
+  const data = new Date().toLocaleDateString('pt-BR');
+
+  // Store for PDF
+  _simData = { credito, prazo, taxa, embutidoPct, proprioPct, lanceEmbutido, lanceProprio, lanceCombinado,
+    parcelaSemLance, parcelaEmbutida, parcelaPropria, parcelaCombinada,
+    totalSemLance, totalEmbutido, totalProprio, totalCombinado,
+    economiaEmbutido, economiaProprio, tipo, tipoLabel: tipoLabel[tipo], cliente, data,
+    taxaMensal: taxaAdmMensal * prazo };
+
+  const tituloEl = document.getElementById('sim-titulo');
+  const iconEl = document.getElementById('sim-icon');
+  if (tituloEl) tituloEl.textContent = 'Proposta para ' + (cliente||'Cliente');
+  if (iconEl) iconEl.textContent = icons[tipo]||'🧮';
+
+  const box = (label, val, cor, sub) => `
+    <div style="background:${cor||'#fff08'};border-radius:8px;padding:12px;border:1px solid ${cor?cor+'44':'#fff1'}">
+      <div style="font-size:9px;color:#fff7;text-transform:uppercase;letter-spacing:1px;font-family:monospace;">${label}</div>
+      <div style="font-size:17px;font-weight:800;color:#fff;margin-top:3px;">${val}</div>
+      ${sub?'<div style="font-size:10px;color:#fff6;margin-top:2px;">'+sub+'</div>':''}
+    </div>`;
+
+  const sep = (title) => `<div style="grid-column:1/-1;border-top:1px solid #fff1;padding-top:12px;margin-top:4px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:2px;color:var(--accent);font-family:monospace;">${title}</div>`;
+
+  let html = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">`;
+  html += sep('Sem Lance');
+  html += box('Crédito', fmt(credito));
+  html += box('Parcela Mensal', fmt(parcelaSemLance));
+  html += box('Prazo', prazo+' meses');
+  html += box('Total a Pagar', fmt(totalSemLance));
+
+  if (embutidoPct > 0) {
+    html += sep('Com Lance Embutido (' + embutidoPct + '% = ' + fmt(lanceEmbutido) + ')');
+    html += box('Lance Embutido', fmt(lanceEmbutido), '#1a3c5e', 'fundo comum');
+    html += box('Nova Parcela', fmt(parcelaEmbutida), '#1a3c5e', 'reducao de '+fmt(parcelaSemLance-parcelaEmbutida)+'/mes');
+    html += box('Total a Pagar', fmt(totalEmbutido), '#1a3c5e');
+    html += box('Economia Total', fmt(economiaEmbutido), '#1a5e3c', 'vs sem lance');
+  }
+
+  if (proprioPct > 0) {
+    html += sep('Com Recurso Proprio (' + proprioPct + '% = ' + fmt(lanceProprio) + ')');
+    html += box('Lance a Vista', fmt(lanceProprio), '#5e3a1a', 'pago pelo cliente');
+    html += box('Nova Parcela', fmt(parcelaPropria), '#5e3a1a', 'reducao de '+fmt(parcelaSemLance-parcelaPropria)+'/mes');
+    html += box('Parcelas + Lance', fmt(totalProprio), '#5e3a1a');
+    html += box('Economia Parcelas', fmt(economiaProprio), '#1a5e3c', 'vs sem lance');
+  }
+
+  if (embutidoPct > 0 && proprioPct > 0) {
+    html += sep('Lance Combinado (Embutido + Proprio)');
+    html += box('Total Lance', fmt(lanceCombinado), '#4a1a7a', fmt(lanceEmbutido)+' emb + '+fmt(lanceProprio)+' prop');
+    html += box('Nova Parcela', fmt(parcelaCombinada), '#4a1a7a', 'reducao de '+fmt(parcelaSemLance-parcelaCombinada)+'/mes');
+    html += box('Prazo', prazo+' meses', '#4a1a7a');
+    html += box('Total Geral', fmt(totalCombinado), '#4a1a7a');
+  }
+
+  html += '</div>';
+  html += `<div style="margin-top:14px;font-size:10px;color:#fff4;font-family:monospace;line-height:1.6;">* Taxa administrativa de ${taxa}% ao ano incluida. Simulacao para fins informativos. Valores sujeitos a condicoes da administradora. Data: ${data}</div>`;
+
+  const el = document.getElementById('sim-result');
+  if (el) el.innerHTML = html;
+}
+
+function gerarPDF() {
+  const d = _simData;
+  if (!d.credito) { toast('Preencha a simulação primeiro!'); return; }
+
+  const w = window.open('','_blank');
+  const fmt2 = (n) => 'R$ '+(+n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  const linhaTab = (label, val, cor) =>
+    `<tr style="background:${cor||'#fff'}"><td style="padding:9px 14px;border-bottom:1px solid #e5e5e5;font-size:13px;color:#333">${label}</td><td style="padding:9px 14px;border-bottom:1px solid #e5e5e5;font-size:13px;font-weight:700;text-align:right;color:#1a1612">${val}</td></tr>`;
+
+  const secao = (titulo, cor) =>
+    `<tr style="background:${cor||'#1a1612'}"><td colspan="2" style="padding:10px 14px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:2px;color:${cor?'#fff':'#c8a96e'}">${titulo}</td></tr>`;
+
+  let tabelaLances = '';
+  if (d.embutidoPct > 0 || d.proprioPct > 0) {
+    if (d.embutidoPct > 0) {
+      tabelaLances += secao('Lance Embutido - Fundo Comum', '#1e5fa8');
+      tabelaLances += linhaTab('Percentual do Lance Embutido', d.embutidoPct+'% do credito');
+      tabelaLances += linhaTab('Valor do Lance Embutido', fmt2(d.lanceEmbutido));
+      tabelaLances += linhaTab('Parcela com Lance Embutido', fmt2(d.parcelaEmbutida), '#f0f7ff');
+      tabelaLances += linhaTab('Total com Lance Embutido', fmt2(d.totalEmbutido), '#f0f7ff');
+      tabelaLances += linhaTab('Economia vs Sem Lance', fmt2(d.economiaEmbutido), '#e8f5ee');
+    }
+    if (d.proprioPct > 0) {
+      tabelaLances += secao('Lance com Recurso Proprio', '#b45309');
+      tabelaLances += linhaTab('Percentual do Lance Proprio', d.proprioPct+'% do credito');
+      tabelaLances += linhaTab('Valor do Lance a Vista', fmt2(d.lanceProprio));
+      tabelaLances += linhaTab('Parcela com Lance Proprio', fmt2(d.parcelaPropria), '#fef9f0');
+      tabelaLances += linhaTab('Total (Parcelas + Lance)', fmt2(d.totalProprio), '#fef9f0');
+      tabelaLances += linhaTab('Economia nas Parcelas', fmt2(d.economiaProprio), '#e8f5ee');
+    }
+    if (d.embutidoPct > 0 && d.proprioPct > 0) {
+      tabelaLances += secao('Lance Combinado (Embutido + Proprio)', '#4a1a7a');
+      tabelaLances += linhaTab('Lance Total Combinado', fmt2(d.lanceCombinado));
+      tabelaLances += linhaTab('Parcela com Lance Combinado', fmt2(d.parcelaCombinada), '#f5f0ff');
+      tabelaLances += linhaTab('Total Geral', fmt2(d.totalCombinado), '#f5f0ff');
+    }
+  }
+
+  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+  <title>Simulacao Consorcio - ${d.cliente}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700;900&display=swap');
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{font-family:'Lato',sans-serif;background:#fff;color:#1a1612;}
+    .page{max-width:700px;margin:0 auto;padding:40px 32px;}
+    @media print{.page{padding:20px;max-width:100%;}.no-print{display:none!important;}}
+    .header{background:linear-gradient(135deg,#1a1612,#2e2820);color:#fff;padding:32px;border-radius:12px;margin-bottom:28px;display:flex;justify-content:space-between;align-items:flex-end;}
+    .logo-area .tag{font-size:9px;letter-spacing:4px;color:#c8a96e;text-transform:uppercase;font-family:monospace;}
+    .logo-area .name{font-size:32px;font-weight:900;color:#fff;letter-spacing:-1px;margin-top:2px;}
+    .logo-area .sub{font-size:12px;color:#fff6;margin-top:3px;}
+    .client-area{text-align:right;}
+    .client-area .clabel{font-size:10px;color:#fff6;text-transform:uppercase;letter-spacing:1px;font-family:monospace;}
+    .client-area .cname{font-size:20px;font-weight:700;color:#fff;margin-top:3px;}
+    .client-area .cdate{font-size:11px;color:#fff5;margin-top:2px;}
+    .icon-bar{display:flex;align-items:center;gap:10px;margin-bottom:20px;padding:16px 20px;background:#f5f3ef;border-radius:8px;border-left:4px solid #c8a96e;}
+    .icon-bar .tipo-icon{font-size:28px;}
+    .icon-bar .tipo-label{font-size:16px;font-weight:700;color:#1a1612;}
+    .icon-bar .tipo-sub{font-size:12px;color:#9a9189;}
+    table{width:100%;border-collapse:collapse;border-radius:10px;overflow:hidden;box-shadow:0 1px 8px #0001;margin-bottom:20px;}
+    .footer{margin-top:24px;padding-top:16px;border-top:2px solid #e2ddd6;font-size:10px;color:#9a9189;line-height:1.7;}
+    .footer strong{color:#1a1612;}
+    .print-btn{background:#1a1612;color:#fff;border:none;padding:12px 28px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:24px;display:block;}
+    .print-btn:hover{background:#2e2820;}
+    h2{font-size:15px;font-weight:800;color:#1a1612;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px;}
+  </style></head><body>
+  <div class="page">
+    <button class="print-btn no-print" onclick="window.print()">🖨️ Imprimir / Salvar PDF</button>
+    <div class="header">
+      <div class="logo-area">
+        <div class="tag">Simulacao de Consorcio</div>
+        <div class="name">Axios</div>
+        <div class="sub">Gestao de Consorcios · Maringa - PR</div>
+      </div>
+      <div class="client-area">
+        <div class="clabel">Proposta para</div>
+        <div class="cname">${d.cliente||'Cliente'}</div>
+        <div class="cdate">${d.data}</div>
+      </div>
     </div>
-    ${lancePct>0?`<div style="background:#1a7a4a22;border-radius:8px;padding:12px;margin-top:10px;border:1px solid #1a7a4a44"><div style="font-size:11px;color:#2da05f;font-weight:700">✅ Com o lance de ${fmt(lance)}, você economiza ${fmt(economiaLance)} no total!</div></div>`:''}
-    <div style="margin-top:12px;font-size:10px;color:#fff4;font-family:monospace">* Taxa administrativa de ${taxa}% ao ano incluída. Simulação para fins informativos.</div>`;
+
+    <div class="icon-bar">
+      <div class="tipo-icon">${{MOTO:'🏍️',CARRO:'🚗',IMOVEL:'🏠'}[d.tipo]||'🧮'}</div>
+      <div>
+        <div class="tipo-label">Consorcio de ${d.tipoLabel}</div>
+        <div class="tipo-sub">Credito: ${fmt2(d.credito)} · Prazo: ${d.prazo} meses · Taxa adm: ${d.taxa}% ao ano</div>
+      </div>
+    </div>
+
+    <h2>Simulacao Base (Sem Lance)</h2>
+    <table>
+      ${secao('Valores Principais')}
+      ${linhaTab('Credito Contratado', fmt2(d.credito))}
+      ${linhaTab('Prazo Total', d.prazo+' meses')}
+      ${linhaTab('Taxa Administrativa', d.taxa+'% ao ano')}
+      ${linhaTab('Parcela Mensal (sem lance)', fmt2(d.parcelaSemLance), '#f5f3ef')}
+      ${linhaTab('Total a Pagar (sem lance)', fmt2(d.totalSemLance), '#f5f3ef')}
+    </table>
+
+    ${tabelaLances ? '<h2>Simulacoes com Lance</h2><table>'+tabelaLances+'</table>' : ''}
+
+    <div class="footer">
+      <strong>Axios Maringa - Compra e Venda de Consorcios</strong><br>
+      Esta simulacao e meramente informativa e nao constitui proposta formal de contrato.
+      Valores sujeitos a alteracao conforme condicoes vigentes da administradora.<br>
+      Simulacao gerada em: ${d.data} · Sistema Axios v2.0
+    </div>
+  </div>
+  </body></html>`;
+
+  w.document.write(html);
+  w.document.close();
 }
 
 // ── USUÁRIOS ──
@@ -975,6 +1214,16 @@ async function renderUsuarios() {
   document.getElementById('content').innerHTML = html;
 }
 
+// ── CALCULO ENTRADA ──
+function calcEntrada() {
+  const vpago = +document.getElementById('v-vpago')?.value || 0;
+  const lance = +document.getElementById('v-lance')?.value || 0;
+  const agil  = +document.getElementById('v-agil')?.value  || 0;
+  const total = vpago + lance + agil;
+  const el = document.getElementById('v-entrada');
+  if (el) el.value = total.toFixed(2);
+}
+
 // ── CRUD ──
 async function salvar(tipo) {
   try {
@@ -982,7 +1231,7 @@ async function salvar(tipo) {
       await api('POST','/estoque',{grupo:v('e-grupo'),cota:v('e-cota'),adm:v('e-adm'),investidor:v('e-investidor'),credito:+v('e-credito')||0,parcela:+v('e-parcela')||0,pago:+v('e-pago')||0,categoria:v('e-cat'),situacao:v('e-sit'),vcto:v('e-vcto'),meses:+v('e-meses')||0,atraso:+v('e-atraso')||0,obs:v('e-obs')});
       cm('modal-estoque'); toast('✅ Cota salva!'); await renderEstoque();
     } else if (tipo==='venda') {
-      await api('POST','/vendas',{adm:v('v-adm'),grupo:v('v-grupo'),cota:v('v-cota'),credito:+v('v-credito')||0,vpago:+v('v-vpago')||0,lance:+v('v-lance')||0,agil:+v('v-agil')||0,entrada:+v('v-entrada')||0,parc_ant:0,parc_nova:0,pertence:v('v-pertence'),cliente:v('v-cliente'),pago_cli:+v('v-pago-cli')||0,data:v('v-data'),banco:v('v-banco'),vcto:'',status:v('v-status'),vendedor:v('v-vendedor'),obs:v('v-obs')});
+      await api('POST','/vendas',{adm:v('v-adm'),grupo:v('v-grupo'),cota:v('v-cota'),credito:+v('v-credito')||0,vpago:+v('v-vpago')||0,lance:+v('v-lance')||0,agil:+v('v-agil')||0,entrada:+v('v-entrada')||0,parc_ant:0,parc_nova:0,pertence:v('v-pertence'),cliente:v('v-cliente'),intermediador:v('v-intermediador'),pago_cli:+v('v-pago-cli')||0,data:v('v-data'),banco:v('v-banco'),vcto:'',status:v('v-status'),vendedor:v('v-vendedor'),obs:v('v-obs')});
       cm('modal-venda'); toast('✅ Venda registrada!'); await renderVendas();
     } else if (tipo==='vsem') {
       await api('POST','/vendas_sem',{grupo:v('vs-grupo'),cota:v('vs-cota'),investidor:v('vs-investidor'),adm:v('vs-adm'),credito:+v('vs-credito')||0,parcela:+v('vs-parcela')||0,categoria:v('vs-cat'),vendedor:v('vs-vendedor'),meses:0,vcto:''});
