@@ -87,15 +87,42 @@ async function initDB() {
       status TEXT DEFAULT 'ATIVO', obs TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS parceiros (
+      id SERIAL PRIMARY KEY,
+      nome TEXT NOT NULL,
+      cpf TEXT, telefone TEXT, email TEXT,
+      cidade TEXT, estado TEXT DEFAULT 'PR',
+      tipo TEXT DEFAULT 'PARCEIRO', status TEXT DEFAULT 'ATIVO',
+      obs TEXT, created_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS parceiros_vendas (
+      id SERIAL PRIMARY KEY,
+      parceiro_id INTEGER REFERENCES parceiros(id) ON DELETE CASCADE,
+      grupo TEXT, cota TEXT, adm TEXT,
+      credito NUMERIC DEFAULT 0, parcela NUMERIC DEFAULT 0,
+      categoria TEXT, situacao TEXT DEFAULT 'S/ CONTEM',
+      data_venda TEXT, valor_comissao NUMERIC DEFAULT 0,
+      status TEXT DEFAULT 'ATIVO', obs TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS parceiros_docs (
+      id SERIAL PRIMARY KEY,
+      parceiro_id INTEGER REFERENCES parceiros(id) ON DELETE CASCADE,
+      nome TEXT NOT NULL,
+      tipo TEXT DEFAULT 'DOCUMENTO',
+      conteudo TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
   `);
 
-  // Migracoes: adicionar colunas novas em tabelas existentes
+  // Migracoes
   await pool.query(`
     ALTER TABLE vendas ADD COLUMN IF NOT EXISTS vendedor TEXT;
     ALTER TABLE vendas ADD COLUMN IF NOT EXISTS intermediador TEXT;
     ALTER TABLE contratos ADD COLUMN IF NOT EXISTS adm TEXT;
     ALTER TABLE contratos ADD COLUMN IF NOT EXISTS grupo TEXT;
     ALTER TABLE contratos ADD COLUMN IF NOT EXISTS cota TEXT;
+    ALTER TABLE estoque ADD COLUMN IF NOT EXISTS grupo_cota TEXT;
   `);
 
   const uc = await pool.query('SELECT COUNT(*) FROM usuarios');
@@ -270,13 +297,50 @@ function makeRoutes(table, allowedPerfis, readPerfis) {
   });
 }
 
-makeRoutes('estoque',     ['admin','financeiro'],           ['admin','vendedor','financeiro','investidor']);
-makeRoutes('vendas',      ['admin','vendedor'],             ['admin','vendedor','financeiro']);
-makeRoutes('vendas_sem',  ['admin','vendedor'],             ['admin','vendedor','financeiro']);
-makeRoutes('caixa',       ['admin','financeiro'],           ['admin','financeiro']);
-makeRoutes('investidores',['admin'],                       ['admin','investidor','financeiro']);
-makeRoutes('agenda',      ['admin','vendedor','financeiro'],['admin','vendedor','financeiro']);
-makeRoutes('contratos',   ['admin','vendedor'],             ['admin','vendedor','financeiro']);
+makeRoutes('estoque',         ['admin','financeiro'],           ['admin','vendedor','financeiro','investidor']);
+makeRoutes('vendas',          ['admin','vendedor'],             ['admin','vendedor','financeiro']);
+makeRoutes('vendas_sem',      ['admin','vendedor'],             ['admin','vendedor','financeiro']);
+makeRoutes('caixa',           ['admin','financeiro'],           ['admin','financeiro']);
+makeRoutes('investidores',    ['admin'],                        ['admin','investidor','financeiro']);
+makeRoutes('agenda',          ['admin','vendedor','financeiro'],['admin','vendedor','financeiro']);
+makeRoutes('contratos',       ['admin','vendedor'],             ['admin','vendedor','financeiro']);
+makeRoutes('parceiros',       ['admin','vendedor'],             ['admin','vendedor','financeiro']);
+makeRoutes('parceiros_vendas',['admin','vendedor'],             ['admin','vendedor','financeiro']);
+makeRoutes('parceiros_docs',  ['admin','vendedor'],             ['admin','vendedor','financeiro']);
+
+// PATCH estoque - editar situacao, credito, parcela
+app.patch('/api/estoque/:id', auth, async function(req, res) {
+  try {
+    const allowed = ['situacao','credito','parcela','atraso','obs'];
+    const body = req.body;
+    const keys = Object.keys(body).filter(k => allowed.includes(k));
+    if (!keys.length) return res.status(400).json({ error: 'Nenhum campo valido' });
+    const vals = keys.map(k => body[k]);
+    const sets = keys.map((k,i) => k+'=$'+(i+1)).join(', ');
+    vals.push(req.params.id);
+    const r = await pool.query('UPDATE estoque SET '+sets+' WHERE id=$'+vals.length+' RETURNING *', vals);
+    res.json(r.rows[0]);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Parceiros com suas vendas e docs
+app.get('/api/parceiros/:id/full', auth, async function(req, res) {
+  try {
+    const p = await pool.query('SELECT * FROM parceiros WHERE id=$1', [req.params.id]);
+    const v = await pool.query('SELECT * FROM parceiros_vendas WHERE parceiro_id=$1 ORDER BY id DESC', [req.params.id]);
+    const d = await pool.query('SELECT id,nome,tipo,created_at FROM parceiros_docs WHERE parceiro_id=$1 ORDER BY id DESC', [req.params.id]);
+    res.json({ parceiro: p.rows[0], vendas: v.rows, docs: d.rows });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/parceiros_docs/:id/download', auth, async function(req, res) {
+  try {
+    const r = await pool.query('SELECT * FROM parceiros_docs WHERE id=$1', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Nao encontrado' });
+    const doc = r.rows[0];
+    res.json({ nome: doc.nome, tipo: doc.tipo, conteudo: doc.conteudo });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 app.get('/api/relatorio/comissoes', auth, async function(req, res) {
   try {
@@ -301,8 +365,28 @@ app.get('/api/relatorio/caixa-mensal', auth, async function(req, res) {
       SELECT mes,
         SUM(CASE WHEN tipo='RECEITA' THEN valor ELSE 0 END) as receitas,
         SUM(CASE WHEN tipo='DESPESA' THEN valor ELSE 0 END) as despesas,
-        SUM(CASE WHEN tipo='RECEITA' THEN valor ELSE -valor END) as resultado
+        SUM(CASE WHEN tipo='RECEITA' THEN valor ELSE -valor END) as resultado,
+        COUNT(*) as lancamentos
       FROM caixa GROUP BY mes ORDER BY MIN(created_at)
+    `);
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/relatorio/caixa-anual', auth, async function(req, res) {
+  try {
+    const r = await pool.query(`
+      SELECT
+        SUBSTRING(mes FROM 4) as ano,
+        SUM(CASE WHEN tipo='RECEITA' THEN valor ELSE 0 END) as receitas,
+        SUM(CASE WHEN tipo='DESPESA' THEN valor ELSE 0 END) as despesas,
+        SUM(CASE WHEN tipo='RECEITA' THEN valor ELSE -valor END) as resultado,
+        COUNT(*) as lancamentos,
+        COUNT(DISTINCT mes) as meses_ativos
+      FROM caixa
+      WHERE mes IS NOT NULL AND mes != ''
+      GROUP BY SUBSTRING(mes FROM 4)
+      ORDER BY SUBSTRING(mes FROM 4)
     `);
     res.json(r.rows);
   } catch(e) { res.status(500).json({ error: e.message }); }
