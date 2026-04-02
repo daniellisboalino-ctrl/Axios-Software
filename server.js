@@ -5,7 +5,7 @@ const { Pool } = require('pg');
 const crypto = require('crypto');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -175,7 +175,7 @@ async function initDB() {
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname)));
 
 async function auth(req, res, next) {
   const token = req.headers['x-session'];
@@ -423,7 +423,7 @@ app.get('/api/export', auth, async function(req, res) {
 app.get('/api/health', function(req, res) { res.json({ ok: true }); });
 
 app.get('*', function(req, res) {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 initDB().then(function() {
