@@ -123,6 +123,7 @@ async function initDB() {
     ALTER TABLE contratos ADD COLUMN IF NOT EXISTS grupo TEXT;
     ALTER TABLE contratos ADD COLUMN IF NOT EXISTS cota TEXT;
     ALTER TABLE estoque ADD COLUMN IF NOT EXISTS grupo_cota TEXT;
+    ALTER TABLE estoque ADD COLUMN IF NOT EXISTS agio NUMERIC DEFAULT 0;
   `);
 
   const uc = await pool.query('SELECT COUNT(*) FROM usuarios');
@@ -297,6 +298,56 @@ function makeRoutes(table, allowedPerfis, readPerfis) {
   });
 }
 
+// GET estoque contempladas (situacao = CONTEMPLADA) — before makeRoutes to avoid /:id conflict
+app.get('/api/estoque/contempladas', auth, async function(req, res) {
+  try {
+    const r = await pool.query("SELECT * FROM estoque WHERE situacao = 'CONTEMPLADA' ORDER BY id DESC");
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET estoque vendidas (situacao = VENDIDA) — before makeRoutes
+app.get('/api/estoque/vendidas', auth, async function(req, res) {
+  try {
+    const r = await pool.query("SELECT * FROM estoque WHERE situacao = 'VENDIDA' ORDER BY id DESC");
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET agenda auto-gerada dos vencimentos do estoque — before makeRoutes
+app.get('/api/agenda/estoque-vctos', auth, async function(req, res) {
+  try {
+    const r = await pool.query("SELECT * FROM estoque WHERE vcto IS NOT NULL AND vcto != '' AND situacao != 'VENDIDA' ORDER BY vcto ASC");
+    const eventos = r.rows.map(function(e) {
+      return {
+        id: 'est_' + e.id,
+        titulo: 'Vcto Cota ' + e.grupo + '/' + e.cota,
+        descricao: 'Investidor: ' + (e.investidor||'-') + ' | Crédito: R$ ' + parseFloat(e.credito||0).toFixed(2) + ' | Parcela: R$ ' + parseFloat(e.parcela||0).toFixed(2) + ' | Meses: ' + (e.meses||0),
+        data: e.vcto,
+        hora: '09:00',
+        tipo: 'VENCIMENTO',
+        status: 'PENDENTE',
+        grupo: e.grupo,
+        cota: e.cota,
+        cliente: e.investidor || '',
+        auto: true
+      };
+    });
+    res.json(eventos);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET investidor cotas do estoque — before makeRoutes
+app.get('/api/investidores/:id/cotas', auth, async function(req, res) {
+  try {
+    const inv = await pool.query('SELECT * FROM investidores WHERE id=$1', [req.params.id]);
+    if (!inv.rows.length) return res.status(404).json({ error: 'Nao encontrado' });
+    const nome = inv.rows[0].nome;
+    const cotas = await pool.query("SELECT * FROM estoque WHERE UPPER(investidor) = UPPER($1) ORDER BY id DESC", [nome]);
+    res.json({ investidor: inv.rows[0], cotas: cotas.rows });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 makeRoutes('estoque',         ['admin','financeiro'],           ['admin','vendedor','financeiro','investidor']);
 makeRoutes('vendas',          ['admin','vendedor'],             ['admin','vendedor','financeiro']);
 makeRoutes('vendas_sem',      ['admin','vendedor'],             ['admin','vendedor','financeiro']);
@@ -308,10 +359,10 @@ makeRoutes('parceiros',       ['admin','vendedor'],             ['admin','vended
 makeRoutes('parceiros_vendas',['admin','vendedor'],             ['admin','vendedor','financeiro']);
 makeRoutes('parceiros_docs',  ['admin','vendedor'],             ['admin','vendedor','financeiro']);
 
-// PATCH estoque - editar situacao, credito, parcela
+// PATCH estoque - editar situacao, credito, parcela, agio
 app.patch('/api/estoque/:id', auth, async function(req, res) {
   try {
-    const allowed = ['situacao','credito','parcela','atraso','obs'];
+    const allowed = ['situacao','credito','parcela','atraso','obs','agio'];
     const body = req.body;
     const keys = Object.keys(body).filter(k => allowed.includes(k));
     if (!keys.length) return res.status(400).json({ error: 'Nenhum campo valido' });
