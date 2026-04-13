@@ -5,7 +5,7 @@ const { Pool } = require('pg');
 const crypto = require('crypto');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -123,6 +123,7 @@ async function initDB() {
     ALTER TABLE contratos ADD COLUMN IF NOT EXISTS grupo TEXT;
     ALTER TABLE contratos ADD COLUMN IF NOT EXISTS cota TEXT;
     ALTER TABLE estoque ADD COLUMN IF NOT EXISTS grupo_cota TEXT;
+    ALTER TABLE estoque ADD COLUMN IF NOT EXISTS agio NUMERIC DEFAULT 0;
   `);
 
   const uc = await pool.query('SELECT COUNT(*) FROM usuarios');
@@ -175,7 +176,7 @@ async function initDB() {
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname)));
 
 async function auth(req, res, next) {
   const token = req.headers['x-session'];
@@ -297,6 +298,57 @@ function makeRoutes(table, allowedPerfis, readPerfis) {
   });
 }
 
+// GET /api/estoque/contempladas - cotas com situacao CONTEMPLADA
+app.get('/api/estoque/contempladas', auth, async function(req, res) {
+  try {
+    const r = await pool.query("SELECT * FROM estoque WHERE situacao='CONTEMPLADA' ORDER BY id DESC");
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/estoque/vendidas - cotas com situacao VENDIDA
+app.get('/api/estoque/vendidas', auth, async function(req, res) {
+  try {
+    const r = await pool.query("SELECT * FROM estoque WHERE situacao='VENDIDA' ORDER BY id DESC");
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/agenda/estoque-vctos - auto-gera entradas de agenda a partir dos vencimentos do estoque
+app.get('/api/agenda/estoque-vctos', auth, async function(req, res) {
+  try {
+    const cotas = await pool.query("SELECT * FROM estoque WHERE vcto IS NOT NULL AND vcto != ''");
+    const entries = cotas.rows.map(function(c) {
+      return {
+        titulo: 'Vencimento ' + c.grupo + '/' + c.cota,
+        descricao: 'Parcela: R$ ' + c.parcela + ' | Credito: R$ ' + c.credito + ' | Investidor: ' + c.investidor,
+        data: c.vcto,
+        hora: '09:00',
+        tipo: 'VENCIMENTO',
+        status: 'PENDENTE',
+        grupo: c.grupo,
+        cota: c.cota,
+        cliente: c.investidor
+      };
+    });
+    res.json(entries);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/investidores/:id/cotas - cotas do estoque vinculadas ao investidor
+app.get('/api/investidores/:id/cotas', auth, async function(req, res) {
+  try {
+    const inv = await pool.query('SELECT * FROM investidores WHERE id=$1', [req.params.id]);
+    if (!inv.rows.length) return res.status(404).json({ error: 'Investidor nao encontrado' });
+    const nome = inv.rows[0].nome;
+    const r = await pool.query(
+      "SELECT * FROM estoque WHERE UPPER(investidor) = UPPER($1) ORDER BY id DESC",
+      [nome]
+    );
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 makeRoutes('estoque',         ['admin','financeiro'],           ['admin','vendedor','financeiro','investidor']);
 makeRoutes('vendas',          ['admin','vendedor'],             ['admin','vendedor','financeiro']);
 makeRoutes('vendas_sem',      ['admin','vendedor'],             ['admin','vendedor','financeiro']);
@@ -327,7 +379,7 @@ makeRoutes('parceiros_docs',  ['admin','vendedor'],             ['admin','vended
 // PATCH estoque - editar situacao, credito, parcela
 app.patch('/api/estoque/:id', auth, async function(req, res) {
   try {
-    const allowed = ['situacao','credito','parcela','atraso','obs'];
+    const allowed = ['situacao','credito','parcela','atraso','obs','agio'];
     const body = req.body;
     const keys = Object.keys(body).filter(k => allowed.includes(k));
     if (!keys.length) return res.status(400).json({ error: 'Nenhum campo valido' });
@@ -421,56 +473,7 @@ app.get('/api/relatorio/estoque-resumo', auth, async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// Estoque contempladas disponiveis
-app.get('/api/estoque-contempladas', auth, async function(req, res) {
-  try {
-    const r = await pool.query("SELECT * FROM estoque WHERE situacao='CONTEMPLADA' ORDER BY id DESC");
-    res.json(r.rows);
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
 
-// Auto-gerar eventos de vencimento para agenda
-app.post('/api/agenda/sync-vencimentos', auth, async function(req, res) {
-  try {
-    // Busca cotas do estoque com vcto preenchido
-    const cotas = await pool.query("SELECT * FROM estoque WHERE vcto IS NOT NULL AND vcto != ''");
-    let criados = 0;
-    for (const c of cotas.rows) {
-      const titulo = 'Vencimento ' + c.grupo + '/' + c.cota;
-      // Verifica se ja existe
-      const existe = await pool.query(
-        "SELECT id FROM agenda WHERE titulo=$1 AND data=$2 AND tipo='VENCIMENTO'",
-        [titulo, c.vcto]
-      );
-      if (!existe.rows.length) {
-        await pool.query(
-          "INSERT INTO agenda (titulo,descricao,data,hora,tipo,status,grupo,cota,cliente) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-          [titulo, 'Parcela: R$ '+c.parcela+' | Credito: R$ '+c.credito+' | Investidor: '+c.investidor, c.vcto, '09:00', 'VENCIMENTO', 'PENDENTE', c.grupo, c.cota, c.investidor]
-        );
-        criados++;
-      }
-    }
-    res.json({ ok: true, criados });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-// Move cota estoque -> vendas contempladas
-app.post('/api/estoque/:id/vender', auth, async function(req, res) {
-  try {
-    const cota = await pool.query('SELECT * FROM estoque WHERE id=$1', [req.params.id]);
-    if (!cota.rows.length) return res.status(404).json({ error: 'Cota nao encontrada' });
-    const c = cota.rows[0];
-    const body = req.body;
-    // Insert into vendas
-    const v = await pool.query(
-      'INSERT INTO vendas (adm,grupo,cota,credito,vpago,lance,agil,entrada,parc_ant,parc_nova,pertence,cliente,intermediador,pago_cli,data,banco,vcto,status,vendedor,obs) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *',
-      [c.adm, c.grupo, c.cota, c.credito, body.vpago||0, body.lance||0, body.agil||0, body.entrada||0, body.parc_ant||0, body.parc_nova||0, c.investidor, body.cliente||'', body.intermediador||'', body.pago_cli||0, body.data||new Date().toISOString().split('T')[0], body.banco||'', c.vcto||'', 'PENDENTE', body.vendedor||'', body.obs||'']
-    );
-    // Remove from estoque
-    await pool.query('DELETE FROM estoque WHERE id=$1', [req.params.id]);
-    res.json({ ok: true, venda: v.rows[0] });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
 
 app.get('/api/export', auth, async function(req, res) {
   try {
@@ -490,7 +493,7 @@ app.get('/api/export', auth, async function(req, res) {
 app.get('/api/health', function(req, res) { res.json({ ok: true }); });
 
 app.get('*', function(req, res) {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 initDB().then(function() {
